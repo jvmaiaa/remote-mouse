@@ -23,12 +23,13 @@
     <div id="trackpad"></div>
 
     <script>
-        const SENSIBILIDADE = 3; // 1.0 = padrão (1 pixel de dedo = 1 pixel de cursor). Aumente para mais sensível.
+        const SENSIBILIDADE = 3; // 1.0 = padrão. Aumente para mais sensível.
+        const TEMPO_DUPLO_CLIQUE_MS = 300; // janela para o 2º toque contar como "duplo toque"
+        const LIMIAR_MOVIMENTO_PX = 8;     // tolerância de tremida do dedo
 
         const statusEl = document.getElementById('status');
         const trackpad = document.getElementById('trackpad');
 
-        // Troque pelo IP do seu PC na rede local (vamos descobrir isso no Passo 5)
         const wsUrl = `ws://${location.hostname}:8081`;
         const socket = new WebSocket(wsUrl);
 
@@ -38,27 +39,27 @@
         let ultimoX = 0;
         let ultimoY = 0;
         let moveu = false;
-        let modoArrasto = false;      // true quando o "botão" está pressionado (drag)
-        let timerPressionar = null;   // controla o tempo de "segurar" o dedo
-
-        const TEMPO_PARA_ARRASTAR_MS = 350; // quanto tempo parado até virar "arrastar"
-        const LIMIAR_MOVIMENTO_PX = 8;      // tolerância de tremida do dedo
+        let modoArrasto = false;        // true = "botão" pressionado (drag ativo)
+        let aguardandoSegundoToque = false; // true = já soltei o 1º toque e estou na janela de espera do 2º
+        let timerCliquePendente = null; // controla o envio adiado do clique único
 
         trackpad.addEventListener('touchstart', (e) => {
             const toque = e.touches[0];
             ultimoX = toque.clientX;
             ultimoY = toque.clientY;
             moveu = false;
-            modoArrasto = false;
 
-            // Se o dedo ficar parado por TEMPO_PARA_ARRASTAR_MS, ativa o modo arrasto
-            timerPressionar = setTimeout(() => {
-                if (!moveu) {
-                    modoArrasto = true;
-                    trackpad.style.background = '#3a5a3a'; // feedback visual: ficou "verde"
-                    socket.send('DOWN');
-                }
-            }, TEMPO_PARA_ARRASTAR_MS);
+            if (aguardandoSegundoToque) {
+                // Este é o 2º toque dentro da janela -> cancela o clique pendente do 1º
+                // e ativa o modo arrasto IMEDIATAMENTE, sem precisar soltar o dedo.
+                clearTimeout(timerCliquePendente);
+                timerCliquePendente = null;
+                aguardandoSegundoToque = false;
+
+                modoArrasto = true;
+                trackpad.style.background = '#3a5a3a'; // feedback visual: modo arrasto ativo
+                socket.send('DOWN');
+            }
         });
 
         trackpad.addEventListener('touchmove', (e) => {
@@ -70,14 +71,6 @@
             ultimoX = toque.clientX;
             ultimoY = toque.clientY;
 
-            if (Math.abs(dx) > LIMIAR_MOVIMENTO_PX || Math.abs(dy) > LIMIAR_MOVIMENTO_PX) {
-                // Moveu antes do tempo de "segurar" completar -> cancela a ativação do arrasto
-                if (timerPressionar) {
-                    clearTimeout(timerPressionar);
-                    timerPressionar = null;
-                }
-            }
-
             if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
                 moveu = true;
                 if (socket.readyState === WebSocket.OPEN) {
@@ -87,21 +80,24 @@
         });
 
         trackpad.addEventListener('touchend', () => {
-            if (timerPressionar) {
-                clearTimeout(timerPressionar);
-                timerPressionar = null;
-            }
-
             if (modoArrasto) {
                 // Estava arrastando -> solta o "botão"
                 socket.send('UP');
                 modoArrasto = false;
-                trackpad.style.background = '#2c2c2c'; // volta a cor original
-            } else if (!moveu) {
-                // Tap rápido, sem ter movido -> clique normal
-                if (socket.readyState === WebSocket.OPEN) {
-                    socket.send('CLICK');
-                }
+                trackpad.style.background = '#2c2c2c';
+                return;
+            }
+
+            if (!moveu) {
+                // Toque único, sem mover -> NÃO clica ainda. Espera a janela de
+                // duplo-toque, pois pode ser o 1º toque de um gesto de arrastar.
+                aguardandoSegundoToque = true;
+                timerCliquePendente = setTimeout(() => {
+                    aguardandoSegundoToque = false;
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send('CLICK');
+                    }
+                }, TEMPO_DUPLO_CLIQUE_MS);
             }
         });
     </script>
