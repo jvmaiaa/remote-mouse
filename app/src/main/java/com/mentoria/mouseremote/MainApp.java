@@ -1,9 +1,25 @@
 package com.mentoria.mouseremote;
 
+import org.slf4j.LoggerFactory;
+
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 public class MainApp {
 
     private static final int HTTP_PORT = 8080;
     private static final int WS_PORT = 8081;
+    private static final org.slf4j.Logger log = LoggerFactory.getLogger(MainApp.class);
+
+    private static Logger logger = Logger.getLogger(MainApp.class.getName());
 
     public static void main(String[] args) throws Exception {
         MouseController mouseController = new MouseController();
@@ -15,11 +31,11 @@ public class MainApp {
         TouchWebSocketServer wsServer = new TouchWebSocketServer(WS_PORT, mouseController);
         wsServer.start();
 
-        System.out.println();
-        System.out.println("=======================================================");
-        System.out.println(" Tudo pronto! No navegador do celular, acesse:");
-        System.out.println(" http://" + descobrirIpLocal() + ":" + HTTP_PORT);
-        System.out.println("=======================================================");
+        logger.info("\"=======================================================\"");
+        logger.info("Tudo pronto! No navegador do celular, acesse:");
+        logger.info(" http://" + descobrirIpLocal() + ":" + HTTP_PORT);
+        logger.info("\"=======================================================\"");
+
     }
 
     /**
@@ -31,26 +47,7 @@ public class MainApp {
      */
     private static String descobrirIpLocal() {
         try {
-            java.util.List<java.net.NetworkInterface> candidatas = new java.util.ArrayList<>();
-            java.util.Enumeration<java.net.NetworkInterface> interfaces =
-                    java.net.NetworkInterface.getNetworkInterfaces();
-
-            while (interfaces.hasMoreElements()) {
-                java.net.NetworkInterface iface = interfaces.nextElement();
-                String nome = iface.getName().toLowerCase();
-
-                if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) {
-                    continue;
-                }
-                // Ignora interfaces criadas por Docker, libvirt, VPNs, veths etc.
-                // (no Linux elas costumam começar com esses prefixos)
-                if (nome.startsWith("docker") || nome.startsWith("br-") || nome.startsWith("veth")
-                        || nome.startsWith("virbr") || nome.startsWith("vmnet") || nome.startsWith("tun")
-                        || nome.startsWith("tap")) {
-                    continue;
-                }
-                candidatas.add(iface);
-            }
+            List<NetworkInterface> candidatas = getNetworkInterfaces();
 
             // 1ª prioridade: interfaces de Wi-Fi (normalmente começam com "wl", ex: wlan0, wlp3s0)
             String ipWifi = buscarIPv4(candidatas, n -> n.startsWith("wl"));
@@ -65,20 +62,41 @@ public class MainApp {
             if (ipQualquer != null) return ipQualquer;
 
         } catch (Exception e) {
-            System.err.println("Não consegui detectar o IP automaticamente: " + e.getMessage());
+            logger.log(Level.SEVERE, "Não consegui detectar o IP automaticamente: {0}", e.getMessage());
         }
         return "SEU_IP_AQUI (rode `hostname -I` e use o IP no formato 192.168.x.x)";
     }
 
-    private static String buscarIPv4(java.util.List<java.net.NetworkInterface> interfaces,
-                                       java.util.function.Predicate<String> filtroNome) throws java.net.SocketException {
-        for (java.net.NetworkInterface iface : interfaces) {
+    private static List<NetworkInterface> getNetworkInterfaces() throws SocketException {
+        List<NetworkInterface> candidatas = new ArrayList<>();
+        Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+
+        while (interfaces.hasMoreElements()) {
+            NetworkInterface iface = interfaces.nextElement();
+            String nome = iface.getName().toLowerCase();
+
+            if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) {
+                continue;
+            }
+            if (nome.startsWith("docker") || nome.startsWith("br-") || nome.startsWith("veth")
+                    || nome.startsWith("virbr") || nome.startsWith("vmnet") || nome.startsWith("tun")
+                    || nome.startsWith("tap")) {
+                continue;
+            }
+            candidatas.add(iface);
+        }
+        return candidatas;
+    }
+
+    private static String buscarIPv4(List<NetworkInterface> interfaces,
+                                     Predicate<String> filtroNome) {
+        for (NetworkInterface iface : interfaces) {
             if (!filtroNome.test(iface.getName().toLowerCase())) continue;
 
-            java.util.Enumeration<java.net.InetAddress> enderecos = iface.getInetAddresses();
+            Enumeration<InetAddress> enderecos = iface.getInetAddresses();
             while (enderecos.hasMoreElements()) {
-                java.net.InetAddress endereco = enderecos.nextElement();
-                if (endereco instanceof java.net.Inet4Address && endereco.isSiteLocalAddress()) {
+                InetAddress endereco = enderecos.nextElement();
+                if (endereco instanceof Inet4Address && endereco.isSiteLocalAddress()) {
                     return endereco.getHostAddress();
                 }
             }
